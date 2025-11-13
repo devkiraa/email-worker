@@ -170,29 +170,28 @@ async function processEmailJob(job) {
       }/${credential.daily_limit || "unlimited"})`
     );
 
-    // Prepare email options
-    const attachmentPath = path.join(
-      __dirname,
-      "..",
-      "QR_GENERATED",
-      path.basename(ticket.image_url || "")
-    );
-
-    // Check if attachment exists
-    if (!fs.existsSync(attachmentPath)) {
-      throw new Error(`Attachment not found: ${attachmentPath}`);
+    // Get attachment from job data (base64 encoded)
+    if (!job.data.attachmentBase64 || !job.data.attachmentFilename) {
+      throw new Error("Attachment data missing in job");
     }
+
+    const attachmentBuffer = Buffer.from(job.data.attachmentBase64, "base64");
+    logger.info(
+      `📎 Attachment loaded: ${job.data.attachmentFilename} (${(
+        attachmentBuffer.length / 1024
+      ).toFixed(2)} KB)`
+    );
 
     const emailOptions = {
       from: `"${job.data.fromName || "Admin"}" <${credential.email}>`,
-      to: ticket.attendee_email,
+      to: job.data.recipientEmail || ticket.attendee_email,
       subject: job.data.subject || `Your Ticket for ${ticket.event_id?.name}`,
       text: job.data.textBody || `Your ticket is attached.`,
       html: job.data.htmlBody || null,
       attachments: [
         {
-          filename: path.basename(ticket.image_url),
-          path: attachmentPath,
+          filename: job.data.attachmentFilename,
+          content: attachmentBuffer,
         },
       ],
     };
@@ -248,6 +247,8 @@ async function processEmailJob(job) {
 // Poll for pending jobs
 async function pollJobs() {
   try {
+    logger.info(`🔍 Polling for pending email jobs...`);
+
     // Find pending email jobs
     const jobs = await Job.find({
       job_type: "send_email",
@@ -265,6 +266,8 @@ async function pollJobs() {
         // Small delay between jobs
         await new Promise((resolve) => setTimeout(resolve, 1000));
       }
+    } else {
+      logger.info(`✅ No pending jobs found`);
     }
   } catch (error) {
     logger.error(`❌ Polling error: ${error.message}`);
