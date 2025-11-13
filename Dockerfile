@@ -3,6 +3,7 @@ FROM node:18-alpine
 
 # Install dependencies for canvas (for ticket generation if needed)
 RUN apk add --no-cache \
+    build-base \
     cairo-dev \
     jpeg-dev \
     pango-dev \
