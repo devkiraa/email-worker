@@ -14,39 +14,65 @@ const MONGODB_URI = process.env.MONGODB_URI;
 const PORT = process.env.PORT || 3001;
 const POLL_INTERVAL = process.env.POLL_INTERVAL || 5000; // 5 seconds
 
-// Job Schema
+// Job Schema - MUST match main app's Job model exactly
 const jobSchema = new mongoose.Schema({
-  ticket_id: { type: mongoose.Schema.Types.ObjectId, ref: "Ticket" },
   job_type: {
     type: String,
-    enum: ["generate_ticket", "send_email"],
+    required: true,
+    enum: ["generate_ticket", "verify_ticket", "update_ticket", "send_email"],
+    index: true,
+  },
+  data: {
+    type: Object,
     required: true,
   },
   status: {
     type: String,
-    enum: ["pending", "processing", "completed", "failed"],
-    default: "pending",
+    enum: ["queued", "pending", "processing", "completed", "error", "failed"],
+    default: "queued",
+    index: true,
   },
-  priority: { type: Number, default: 0 },
-  data: mongoose.Schema.Types.Mixed,
-  error: String,
-  attempts: { type: Number, default: 0 },
-  max_attempts: { type: Number, default: 3 },
-  created_at: { type: Date, default: Date.now },
-  processed_at: Date,
+  result: {
+    type: Object,
+    default: null,
+  },
+  error: {
+    type: String,
+    default: null,
+  },
+  retries: {
+    type: Number,
+    default: 0,
+  },
+  maxRetries: {
+    type: Number,
+    default: 3,
+  },
+  nextRetryAt: {
+    type: Date,
+    default: null,
+  },
+  created_at: {
+    type: Date,
+    default: Date.now,
+    index: true,
+  },
+  updated_at: {
+    type: Date,
+    default: Date.now,
+  },
 });
 
 const Job = mongoose.model("Job", jobSchema);
 
-// Ticket Schema (minimal for reference)
+// Ticket Schema - minimal fields needed for email sending
 const ticketSchema = new mongoose.Schema({
   ticket_number: String,
-  event_id: { type: mongoose.Schema.Types.ObjectId, ref: "Event" },
-  attendee_name: String,
-  attendee_email: String,
-  attendee_phone: String,
-  image_url: String,
+  event: { type: mongoose.Schema.Types.ObjectId, ref: "Event" },
   status: String,
+  imageUrl: String,
+  ticket_details: Object,
+  timestamp: Date,
 });
 
 const Ticket = mongoose.model("Ticket", ticketSchema);
@@ -130,24 +156,32 @@ async function sendEmail(credential, emailOptions, usePort465 = false) {
 async function processEmailJob(job) {
   try {
     logger.info(
-      `📧 Processing email job ${job._id} (Attempt ${job.attempts + 1}/${
-        job.max_attempts
+      `📧 Processing email job ${job._id} (Attempt ${job.retries + 1}/${
+        job.maxRetries
       })`
     );
 
     // Update job status
     job.status = "processing";
-    job.attempts += 1;
+    job.retries += 1;
+    job.updated_at = new Date();
     await job.save();
 
-    // Get ticket details
-    const ticket = await Ticket.findById(job.ticket_id).populate("event_id");
+    // Get ticket details from job data
+    const ticketId = job.data.ticketId;
+    if (!ticketId) {
+      throw new Error("Ticket ID not found in job data");
+    }
+
+    const ticket = await Ticket.findById(ticketId).populate("event");
     if (!ticket) {
       throw new Error("Ticket not found");
     }
 
     logger.info(
-      `🎫 Ticket: ${ticket.ticket_number} for ${ticket.attendee_name}`
+      `🎫 Ticket: ${ticket.ticket_number} for ${
+        ticket.ticket_details?.name || "Unknown"
+      }`
     );
 
     // Get email credential
@@ -184,8 +218,9 @@ async function processEmailJob(job) {
 
     const emailOptions = {
       from: `"${job.data.fromName || "Admin"}" <${credential.email}>`,
-      to: job.data.recipientEmail || ticket.attendee_email,
-      subject: job.data.subject || `Your Ticket for ${ticket.event_id?.name}`,
+      to: job.data.recipientEmail || ticket.ticket_details?.email,
+      subject:
+        job.data.subject || `Your Ticket for ${ticket.event?.name || "Event"}`,
       text: job.data.textBody || `Your ticket is attached.`,
       html: job.data.htmlBody || null,
       attachments: [
@@ -216,12 +251,15 @@ async function processEmailJob(job) {
 
     // Mark job as completed
     job.status = "completed";
-    job.processed_at = new Date();
+    job.result = { success: true, messageId: emailInfo.messageId };
+    job.updated_at = new Date();
     await job.save();
 
     // Update ticket status
-    ticket.status = "sent";
-    await ticket.save();
+    if (ticket) {
+      ticket.status = "sent";
+      await ticket.save();
+    }
 
     logger.info(`✅ Email job ${job._id} completed successfully`);
     return true;
@@ -230,13 +268,16 @@ async function processEmailJob(job) {
 
     // Update job with error
     job.error = error.message;
+    job.updated_at = new Date();
 
-    if (job.attempts >= job.max_attempts) {
+    if (job.retries >= job.maxRetries) {
       job.status = "failed";
-      logger.error(`❌ Max attempts reached for job ${job._id}`);
+      logger.error(`❌ Max retries reached for job ${job._id}`);
     } else {
       job.status = "pending"; // Retry later
-      logger.info(`🔄 Job ${job._id} will be retried`);
+      logger.info(
+        `🔄 Job ${job._id} will be retried (${job.retries}/${job.maxRetries})`
+      );
     }
 
     await job.save();
@@ -253,9 +294,9 @@ async function pollJobs() {
     const jobs = await Job.find({
       job_type: "send_email",
       status: "pending",
-      attempts: { $lt: mongoose.mongo.MAX_ATTEMPTS || 3 },
+      retries: { $lt: 3 },
     })
-      .sort({ priority: -1, created_at: 1 })
+      .sort({ created_at: 1 })
       .limit(5); // Process 5 jobs at a time
 
     if (jobs.length > 0) {
