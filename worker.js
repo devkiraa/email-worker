@@ -271,6 +271,42 @@ async function pollJobs() {
   }
 }
 
+// Root endpoint with service details
+app.get("/", (req, res) => {
+  const mongoStatus =
+    mongoose.connection.readyState === 1 ? "connected" : "disconnected";
+  const mongoStates = [
+    "disconnected",
+    "connected",
+    "connecting",
+    "disconnecting",
+  ];
+
+  res.json({
+    service: "Email Worker Service",
+    version: "1.0.0",
+    description: "Standalone email worker for ticket generation system",
+    status: mongoStatus === "connected" ? "healthy" : "unhealthy",
+    uptime: `${Math.floor(process.uptime())} seconds`,
+    environment: process.env.NODE_ENV || "development",
+    mongodb: {
+      status: mongoStatus,
+      state: mongoStates[mongoose.connection.readyState],
+      database: mongoose.connection.name || "unknown",
+    },
+    configuration: {
+      port: PORT,
+      poll_interval: `${POLL_INTERVAL}ms`,
+    },
+    endpoints: {
+      health: "/health",
+      stats: "/stats",
+      trigger: "POST /trigger",
+    },
+    timestamp: new Date().toISOString(),
+  });
+});
+
 // Health check endpoint
 app.get("/health", (req, res) => {
   const status = mongoose.connection.readyState === 1 ? "healthy" : "unhealthy";
