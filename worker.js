@@ -65,14 +65,16 @@ const jobSchema = new mongoose.Schema({
 
 const Job = mongoose.model("Job", jobSchema);
 
-// Ticket Schema - minimal fields needed for email sending
+// Ticket Schema - MUST match main app's Ticket model exactly
 const ticketSchema = new mongoose.Schema({
   ticket_number: String,
   event: { type: mongoose.Schema.Types.ObjectId, ref: "Event" },
+  attendee_name: String,
+  attendee_email: String,
+  attendee_phone: String,
+  image_url: String,
   status: String,
-  imageUrl: String,
-  ticket_details: Object,
-  timestamp: Date,
+  created_at: { type: Date, default: Date.now },
 });
 
 const Ticket = mongoose.model("Ticket", ticketSchema);
@@ -360,14 +362,32 @@ app.get("/health", (req, res) => {
     uptime: process.uptime(),
     mongodb:
       mongoose.connection.readyState === 1 ? "connected" : "disconnected",
+    lastPoll: new Date().toISOString(), // Current time as last poll indicator
   });
 });
 
 // Manual trigger endpoint (for testing)
 app.post("/trigger", async (req, res) => {
   try {
+    const jobsFound = await Job.countDocuments({
+      job_type: "send_email",
+      status: "pending",
+      retries: { $lt: 3 },
+    });
+
     await pollJobs();
-    res.json({ success: true, message: "Job polling triggered" });
+
+    const jobsProcessed = await Job.countDocuments({
+      job_type: "send_email",
+      status: { $in: ["processing", "completed"] },
+      updated_at: { $gte: new Date(Date.now() - 10000) }, // Last 10 seconds
+    });
+
+    res.json({
+      message: "Polling triggered manually",
+      jobsFound,
+      jobsProcessed,
+    });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
@@ -376,23 +396,32 @@ app.post("/trigger", async (req, res) => {
 // Stats endpoint
 app.get("/stats", async (req, res) => {
   try {
+    const totalJobs = await Job.countDocuments({ job_type: "send_email" });
+    const pendingJobs = await Job.countDocuments({
+      job_type: "send_email",
+      status: "pending",
+    });
+    const processingJobs = await Job.countDocuments({
+      job_type: "send_email",
+      status: "processing",
+    });
+    const completedJobs = await Job.countDocuments({
+      job_type: "send_email",
+      status: "completed",
+    });
+    const failedJobs = await Job.countDocuments({
+      job_type: "send_email",
+      status: "failed",
+    });
+
     const stats = {
-      pending: await Job.countDocuments({
-        job_type: "send_email",
-        status: "pending",
-      }),
-      processing: await Job.countDocuments({
-        job_type: "send_email",
-        status: "processing",
-      }),
-      completed: await Job.countDocuments({
-        job_type: "send_email",
-        status: "completed",
-      }),
-      failed: await Job.countDocuments({
-        job_type: "send_email",
-        status: "failed",
-      }),
+      totalJobs,
+      pendingJobs,
+      processingJobs,
+      completedJobs,
+      failedJobs,
+      mongodb:
+        mongoose.connection.readyState === 1 ? "connected" : "disconnected",
     };
     res.json(stats);
   } catch (error) {
