@@ -1,0 +1,66 @@
+version: "3.8"
+
+services:
+  # Email Worker Service
+  email-worker:
+    build:
+      context: ./email-worker
+      dockerfile: Dockerfile
+    container_name: email-worker
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    environment:
+      - MONGODB_URI=${MONGODB_URI}
+      - PORT=3001
+      - POLL_INTERVAL=5000
+      - NODE_ENV=production
+    volumes:
+      # Mount QR_GENERATED folder for ticket images
+      - ./QR_GENERATED:/app/QR_GENERATED:ro
+    depends_on:
+      - mongodb
+    networks:
+      - ticket-network
+    healthcheck:
+      test: ["CMD", "node", "healthcheck.js"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # MongoDB (if running locally)
+  mongodb:
+    image: mongo:6
+    container_name: mongodb
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=admin
+      - MONGO_INITDB_ROOT_PASSWORD=password123
+    volumes:
+      - mongodb_data:/data/db
+    networks:
+      - ticket-network
+
+  # Main App (optional - if you want to run both)
+  # main-app:
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile
+  #   ports:
+  #     - "3000:3000"
+  #   environment:
+  #     - MONGODB_URI=${MONGODB_URI}
+  #   volumes:
+  #     - ./QR_GENERATED:/app/QR_GENERATED
+  #   networks:
+  #     - ticket-network
+
+networks:
+  ticket-network:
+    driver: bridge
+
+volumes:
+  mongodb_data:

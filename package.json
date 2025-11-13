@@ -1,0 +1,21 @@
+{
+  "name": "email-worker-service",
+  "version": "1.0.0",
+  "description": "Standalone email worker service for ticket generation",
+  "main": "worker.js",
+  "scripts": {
+    "start": "node worker.js",
+    "dev": "nodemon worker.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "nodemailer": "^6.9.7",
+    "mongoose": "^7.6.3",
+    "dotenv": "^16.3.1",
+    "canvas": "^2.11.2",
+    "qrcode": "^1.5.3"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
+  }
+}
